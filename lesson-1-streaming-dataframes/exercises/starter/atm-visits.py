@@ -1,16 +1,37 @@
 from pyspark.sql import SparkSession
 
-# TO-DO: create a spark session, with an appropriately named application name
+SPARK_HOST = "spark://spark:7077"
+KAFKA_HOST = "kafka:19092"
 
-#TO-DO: set the log level to WARN
+spark = SparkSession.builder.appName("atm-visits").master(SPARK_HOST).getOrCreate()
+spark.sparkContext.setLogLevel("WARN")
 
-#TO-DO: read the atm-visits kafka topic as a source into a streaming dataframe with the bootstrap server kafka:19092, configuring the stream to read the earliest messages possible                                    
+atm_visits_raw_streaming_df = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_HOST) \
+    .option("subscribe", "atm-visits") \
+    .option("startingOffsets", "earliest") \
+    .load()
 
-#TO-DO: using a select expression on the streaming dataframe, cast the key and the value columns from kafka as strings, and then select them
+atm_visits_streaming_df = atm_visits_raw_streaming_df.selectExpr(
+    "cast(key as string) as transaction_id", "cast(value as string) as location"
+)
 
-# TO-DO: create a temporary streaming view called "ATMVisits" based on the streaming dataframe
+atm_visits_streaming_df.createOrReplaceTempView("ATMVisits")
 
-# TO-DO query the temporary view with spark.sql, with this query: "select * from ATMVisits"
+atm_visits_select_from_temp_view_df = spark.sql("select * from ATMVisits")
 
-# TO-DO: write the dataFrame from the last select statement to kafka to the atm-visit-updates topic, on the broker kafka:19092
-# TO-DO: for the "checkpointLocation" option in the writeStream, be sure to use a unique file path to avoid conflicts with other spark scripts
+stream_console = atm_visits_select_from_temp_view_df \
+    .selectExpr("cast(transaction_id as string) as key", "cast(location as string) as value") \
+    .writeStream.outputMode("append").format("console").start()
+
+stream_kafka = atm_visits_select_from_temp_view_df \
+    .selectExpr("cast(transaction_id as string) as key", "cast(location as string) as value") \
+    .writeStream.format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_HOST) \
+    .option("topic", "atm-visit-updated") \
+    .option("checkpointLocation", "/tmp/kafkacheckpoint") \
+    .start()
+
+stream_console.awaitTermination()
+stream_kafka.awaitTermination()

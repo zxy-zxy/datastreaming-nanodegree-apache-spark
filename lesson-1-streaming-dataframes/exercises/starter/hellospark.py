@@ -1,28 +1,43 @@
 from pyspark.sql import SparkSession
 
-# TO-DO: create a variable with the absolute path to the text file
-# /home/workspace/lesson-1-streaming-dataframes/exercises/starter/Test.txt
+SPARK_DATA_PATH = 'file:///home/workspace/data'
+test_file = f"{SPARK_DATA_PATH}/Test.txt"
 
-# TO-DO: create a Spark session
+spark = (
+    SparkSession.builder.appName("HelloSpark")
+        .master("spark://spark:7077")
+        .getOrCreate()
+)
+spark.sparkContext.setLogLevel('WARN')
 
-# TO-DO: set the log level to WARN
+log_data = spark.read.text(test_file).cache()
 
-# TO-DO: using the Spark session variable, call the appropriate
-# function referencing the text file path to read the text file 
-
-# TO-DO: create a global variable for number of times the letter a is found
-# TO-DO: create a global variable for number of times the letter b is found
-
-# TO-DO: create a function which accepts a row from a dataframe, which has a column called value
-# in the function increment the a count variable for each occurrence of the letter a
-# in the value column
-
-# TO-DO: create another function which accepts a row from a dataframe, which has a column called value
-# in the function increment the b count variable for each occurrence of the letter b
-# in the value column
+numAs = 0
+numBs = 0
 
 
-# TO-DO: use the forEach method to invoke the a counting method
-# TO-DO: use the forEach method to invoke the b counting method
+def count_a(row):
+    global numAs
+    global numBs
+    numAs += row.value.count("a")
+    numBs += 1
+    print(f"Total a count {numAs}")
 
-# TO-DO: stop the spark application
+
+log_data.foreach(count_a)
+
+num_ds = log_data.filter(log_data.value.contains("d")).count()
+num_ss = log_data.filter(log_data.value.contains("s")).count()
+
+
+def printing(x):
+    print(x)
+
+
+log_data.foreach(printing)
+log_data.collect()
+
+res = f"Lines with d: {num_ds}, lines with s: {num_ss}"
+print(res)
+print(f"Lines with a: {numAs}, lines with b: {numBs}")
+spark.stop()

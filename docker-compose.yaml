@@ -111,12 +111,16 @@ services:
       - SPARK_SSL_ENABLED=no
     ports:
       - '8080:8080'
+      - '7077:7077'
     volumes:
       - ./:/home/workspace/
-      - ./spark/jars:/opt/bitnami/spark/.ivy2 
+      - ./spark/jars:/opt/bitnami/spark/.ivy2
+      - ./opt/bitnami/spark/spark-data/:/opt/bitnami/spark/spark-data
 
   spark-worker-1:
     image: docker.io/bitnami/spark:3-debian-10
+    ports:
+      - '8081:8081'
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark:7077
@@ -128,10 +132,8 @@ services:
       - SPARK_SSL_ENABLED=no
     volumes:
       - ./:/home/workspace/
-      - ./spark/jars:/opt/bitnami/spark/.ivy2           
-
-
- 
+      - ./spark/jars:/opt/bitnami/spark/.ivy2
+      - ./opt/bitnami/spark/spark-data/:/opt/bitnami/spark/spark-data
 
 
 

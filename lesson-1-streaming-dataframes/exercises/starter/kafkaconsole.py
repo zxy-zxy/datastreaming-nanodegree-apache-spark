@@ -1,12 +1,23 @@
 from pyspark.sql import SparkSession
 
-#TO-DO: create a Spak Session, and name the app something relevant
+spark = SparkSession.builder.appName("fuel-level").master("spark://spark:7077").getOrCreate()
+spark.sparkContext.setLogLevel('WARN')
 
-#TO-DO: set the log level to WARN
+kafka_raw_streaming_df = spark \
+    .readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "kafka:19092") \
+    .option("subscribe", "fuel-level") \
+    .option("startingOffsets", "earliest") \
+    .load()
 
+kafka_streaming_df = kafka_raw_streaming_df.selectExpr("cast(key as string) as key", "cast(value as string) as value")
 
-#TO-DO: read a stream from the kafka topic 'balance-updates', with the bootstrap server kafka:19092, reading from the earliest message
+# this takes the stream and "sinks" it to the console as it is updated one at a time like this:
+# +--------------------+-----+
+# |                 Key|Value|
+# +--------------------+-----+
+# |1593939359          |13...|
+# +--------------------+-----+
 
-#TO-DO: cast the key and value columns as strings and select them using a select expression function
-
-#TO-DO: write the dataframe to the console, and keep running indefinitely
+kafka_streaming_df.writeStream.outputMode("append").format("console").start().awaitTermination()
