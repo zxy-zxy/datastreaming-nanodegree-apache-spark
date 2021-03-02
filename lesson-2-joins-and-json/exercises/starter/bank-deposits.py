@@ -1,30 +1,53 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, to_json, col, unbase64, base64, split, expr
-from pyspark.sql.types import StructField, StructType, StringType, BooleanType, ArrayType, DateType
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructField, StructType, StringType, BooleanType, ArrayType, DateType, FloatType
 
-# TO-DO: create a kafka message schema StructType including the following JSON elements:
-# {"accountNumber":"703934969","amount":415.94,"dateAndTime":"Sep 29, 2020, 10:06:23 AM"}
+SPARK_HOST = "spark://spark:7077"
+KAFKA_HOST = "kafka:19092"
+TOPIC_NAME = "bank-deposits"
 
-# TO-DO: create a spark session, with an appropriately named application name
+spark = SparkSession.builder.master(SPARK_HOST).appName("bank-deposits").getOrCreate()
+spark.conf.set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+spark.sparkContext.setLogLevel("WARN")
 
-#TO-DO: set the log level to WARN
+bankDepositsSchema = StructType([
+    StructField("accountNumber", StringType()),
+    StructField("amount", FloatType()),
+    StructField("dateAndTime", StringType()),
+])
 
-#TO-DO: read the atm-visits kafka topic as a source into a streaming dataframe with the bootstrap server kafka:19092, configuring the stream to read the earliest messages possible                                    
+bankDepositsRawStreamingDF = spark \
+    .readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_HOST) \
+    .option("subscribe", TOPIC_NAME) \
+    .option("startingOffsets", "earliest") \
+    .load()
 
-#TO-DO: using a select expression on the streaming dataframe, cast the key and the value columns from kafka as strings, and then select them
+bankDepositsStreamingDF = bankDepositsRawStreamingDF \
+    .selectExpr("cast(key as string)", "cast(value as string)")
 
-#TO-DO: using the kafka message StructType, deserialize the JSON from the streaming dataframe 
+dateFormat = "MMM d, yyyy hh:mm:ss a"
 
-# TO-DO: create a temporary streaming view called "BankDeposits" 
-# it can later be queried with spark.sql
+bankDepositsStreamingDF \
+    .withColumn("value", F.from_json("value", bankDepositsSchema)) \
+    .withColumn("dateAndTmeParsed", F.to_timestamp(F.col("value.dateAndTime"), dateFormat)) \
+    .select(F.col("value.*"), F.col("dateAndTmeParsed")) \
+    .createOrReplaceTempView("bankDepositsView")
 
-#TO-DO: using spark.sql, select * from BankDeposits
+bankDepositsSelectFromView = spark.sql("select * from bankDepositsView")
 
-# TO-DO: write the stream to the console, and configure it to run indefinitely, the console output will look something like this:
+consoleStream = bankDepositsSelectFromView. \
+    writeStream. \
+    format("console"). \
+    outputMode("append"). \
+    option("truncate", False). \
+    start()
+consoleStream.awaitTermination()
+
+# The console output will look something like this:
 # +-------------+------+--------------------+
 # |accountNumber|amount|         dateAndTime|
 # +-------------+------+--------------------+
 # |    103397629| 800.8|Oct 6, 2020 1:27:...|
 # +-------------+------+--------------------+
-
-

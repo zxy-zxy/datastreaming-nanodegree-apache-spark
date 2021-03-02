@@ -1,50 +1,97 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, to_json, col, unbase64, base64, split, expr
+from pyspark.sql import functions as F
 from pyspark.sql.types import StructField, StructType, FloatType, StringType, BooleanType, ArrayType, DateType
 
-# TO-DO: create deposit a kafka message schema StructType including the following JSON elements:
-# {"accountNumber":"703934969","amount":415.94,"dateAndTime":"Sep 29, 2020, 10:06:23 AM"}
-# Cast the amount as a FloatType
+SPARK_HOST = "spark://spark:7077"
+KAFKA_HOST = "kafka:19092"
 
-# TO-DO: create a customer kafka message schema StructType including the following JSON elements:
-# {"customerName":"Trevor Anandh","email":"Trevor.Anandh@test.com","phone":"1015551212","birthDay":"1962-01-01","accountNumber":"45204068","location":"Togo"}
+spark = SparkSession.builder.master(SPARK_HOST).appName("customer-deposits").getOrCreate()
+spark.sparkContext.setLogLevel("WARN")
 
-# TO-DO: create a spark session, with an appropriately named application name
+BankDepositsSchema = StructType([
+    StructField("accountNumber", StringType()),
+    StructField("amount", FloatType()),
+    StructField("dateAndTime", StringType())
+])
 
-#TO-DO: set the log level to WARN
+BankCustomersSchema = StructType([
+    StructField("customerName", StringType()),
+    StructField("email", StringType()),
+    StructField("phone", StringType()),
+    StructField("birthDay", StringType()),
+    StructField("accountNumber", StringType()),
+    StructField("location", StringType()),
 
-#TO-DO: read the atm-visits kafka topic as a source into a streaming dataframe with the bootstrap server kafka:19092, configuring the stream to read the earliest messages possible                                    
+])
 
-#TO-DO: using a select expression on the streaming dataframe, cast the key and the value columns from kafka as strings, and then select them
+bankDepositsRawStreamingDF = spark \
+    .readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_HOST) \
+    .option("subscribe", "bank-deposits") \
+    .option("startingOffsets", "earliest") \
+    .load()
 
-#TO-DO: using the kafka message StructType, deserialize the JSON from the streaming dataframe 
+bankDepositsStreamingDF = bankDepositsRawStreamingDF \
+    .selectExpr("cast(key as string) as key", "cast(value as string) as value")
 
-# TO-DO: create a temporary streaming view called "BankDeposits" 
-# it can later be queried with spark.sql
+bankDepositsStreamingDF \
+    .withColumn("value", F.from_json("value", BankDepositsSchema)) \
+    .select("value.*") \
+    .createOrReplaceTempView("BankDeposits")
 
-#TO-DO: using spark.sql, select * from BankDeposits where amount > 200.00 into a dataframe
+bankDepositsSelectFromView = spark.sql(
+    """
+    select
+        accountNumber,
+        amount as amountDeposit,
+        dateAndTime
+    from BankDeposits
+    """
+)
 
-#TO-DO: read the bank-customers kafka topic as a source into a streaming dataframe with the bootstrap server kafka:19092, configuring the stream to read the earliest messages possible                                    
+bankCustomersRawStreamingDF = spark \
+    .readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_HOST) \
+    .option("subscribe", "bank-customers") \
+    .option("startingOffsets", "earliest") \
+    .load()
 
-#TO-DO: using a select expression on the streaming dataframe, cast the key and the value columns from kafka as strings, and then select them
+bankCustomersStreamingDF = bankCustomersRawStreamingDF \
+    .selectExpr("cast(key as string) as key", "cast(value as string) as value")
 
-#TO-DO: using the kafka message StructType, deserialize the JSON from the streaming dataframe 
+bankCustomersStreamingDF \
+    .withColumn("value", F.from_json("value", BankCustomersSchema)) \
+    .select("value.*") \
+    .createOrReplaceTempView("BankCustomers")
 
-# TO-DO: create a temporary streaming view called "BankCustomers" 
-# it can later be queried with spark.sql
+bankCustomersSelectFromView = spark.sql("""
+    select 
+        customerName,
+        email,
+        phone,
+        birthDay,
+        accountNumber as CustomerAccountNumber,
+        location
+    from BankCustomers
+""")
 
-#TO-DO: using spark.sql, select customerName, accountNumber as customerNumber from BankCustomers into a dataframe
+customersDepositsDF = bankDepositsSelectFromView \
+    .join(bankCustomersSelectFromView, F.expr("accountNumber = CustomerAccountNumber"))
 
-#TO-DO: join the customer dataframe with the deposit dataframe
+consoleOutput = customersDepositsDF \
+    .writeStream \
+    .outputMode("append") \
+    .format("console") \
+    .option("truncate", False).start()
+consoleOutput.awaitTermination()
 
-# TO-DO: write the stream to the console, and configure it to run indefinitely, the console output will look something like this:
-#. +-------------+------+--------------------+------------+--------------+
-#. |accountNumber|amount|         dateAndTime|customerName|customerNumber|
-#. +-------------+------+--------------------+------------+--------------+
-#. |    335115395|142.17|Oct 6, 2020 1:59:...| Jacob Doshi|     335115395|
-#. |    335115395| 41.52|Oct 6, 2020 2:00:...| Jacob Doshi|     335115395|
-#. |    335115395| 261.8|Oct 6, 2020 2:01:...| Jacob Doshi|     335115395|
-#. +-------------+------+--------------------+------------+--------------+
-
-
-
+# The console output will look something like this:
+# . +-------------+------+--------------------+------------+--------------+
+# . |accountNumber|amount|         dateAndTime|customerName|customerNumber|
+# . +-------------+------+--------------------+------------+--------------+
+# . |    335115395|142.17|Oct 6, 2020 1:59:...| Jacob Doshi|     335115395|
+# . |    335115395| 41.52|Oct 6, 2020 2:00:...| Jacob Doshi|     335115395|
+# . |    335115395| 261.8|Oct 6, 2020 2:01:...| Jacob Doshi|     335115395|
+# . +-------------+------+--------------------+------------+--------------+
