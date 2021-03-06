@@ -1,51 +1,76 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, to_json, col, unbase64, base64, split, expr
+from pyspark.sql import functions as F
 from pyspark.sql.types import StructField, StructType, StringType, BooleanType, ArrayType, DateType
+
+SPARK_HOST = "spark://spark:7077"
+KAFKA_HOST = "kafka:19092"
 
 redisMessageSchema = StructType(
     [
         StructField("key", StringType()),
         StructField("value", StringType()),
         StructField("expiredType", StringType()),
-        StructField("expiredValue",StringType()),
+        StructField("expiredValue", StringType()),
         StructField("existType", StringType()),
         StructField("ch", StringType()),
-        StructField("incr",BooleanType()),
-        StructField("zSetEntries", ArrayType( \
+        StructField("incr", BooleanType()),
+        StructField("zSetEntries", ArrayType(
             StructType([
-                StructField("element", StringType()),\
-                StructField("score", StringType())   \
-            ]))                                      \
-        )
-
+                StructField("element", StringType()),
+                StructField("score", StringType())
+            ])
+        ))
     ]
 )
 
-# TO-DO: create a StructType for the CustomerLocation schema for the following fields:
-# {"accountNumber":"814840107","location":"France"}
+customerLocationSchema = StructType(
+    [
+        StructField("reservationId", StringType()),
+        StructField("customerId", StringType()),
+    ]
+)
 
-# TO-DO: create a spark session, with an appropriately named application name
+spark = SparkSession.builder.master(SPARK_HOST).appName("customer-location").getOrCreate()
+spark.sparkContext.setLogLevel('WARN')
 
-#TO-DO: set the log level to WARN
+redisServerRawStreamingDF = spark \
+    .readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", KAFKA_HOST) \
+    .option("subscribe", "redis-server") \
+    .option("startingOffsets", "earliest") \
+    .load()
 
-#TO-DO: read the redis-server kafka topic as a source into a streaming dataframe with the bootstrap server kafka:19092, configuring the stream to read the earliest messages possible                                    
+redisServerStreamingDF = redisServerRawStreamingDF.selectExpr("cast(key as string) key", "cast(value as string) value")
 
-#TO-DO: using a select expression on the streaming dataframe, cast the key and the value columns from kafka as strings, and then select them
+# this creates a temporary streaming view based on the streaming dataframe
+# it can later be queried with spark.sql, we will cover that in the next section
+redisServerStreamingDF.withColumn("value", F.from_json("value", redisMessageSchema)) \
+    .select(F.col('value.*')) \
+    .createOrReplaceTempView("RedisData")
 
-#TO-DO: using the redisMessageSchema StructType, deserialize the JSON from the streaming dataframe 
+selectStarFromRedisData = spark.sql("select * from RedisData")
+zSetEntriesEncodedStreamingDF = spark.sql("select key, zSetEntries[0].element as customerLocation from RedisData")
 
-# TO-DO: create a temporary streaming view called "RedisData" based on the streaming dataframe
-# it can later be queried with spark.sql
+zSetDecodedEntriesStreamingDF = zSetEntriesEncodedStreamingDF.withColumn("customerLocation", F.unbase64(
+    zSetEntriesEncodedStreamingDF.customerLocation).cast("string"))
 
-#TO-DO: using spark.sql, select key, zSetEntries[0].element as customerLocation from RedisData
+zSetDecodedEntriesStreamingDF \
+    .withColumn("customerLocation", F.from_json("customerLocation", customerLocationSchema)) \
+    .select(F.col('customerLocation.*')) \
+    .createOrReplaceTempView("CustomerLocation")
 
-#TO-DO: from the dataframe use the unbase64 function to select a column called customerLocation with the base64 decoded JSON, and cast it to a string
+customerLocationStreamingDF = spark.sql("select * from CustomerLocation")
 
-#TO-DO: using the customer location StructType, deserialize the JSON from the streaming dataframe, selecting column customerLocation.* as a temporary view called CustomerLocation 
+consoleOutput = customerLocationStreamingDF \
+    .writeStream \
+    .outputMode("append") \
+    .format("console") \
+    .option("truncate", False) \
+    .start()
+consoleOutput.awaitTermination()
 
-#TO-DO: using spark.sql select * from CustomerLocation
-
-# TO-DO: write the stream to the console, and configure it to run indefinitely, the console output will look something like this:
+# the console output will look something like this:
 # +-------------+---------+
 # |accountNumber| location|
 # +-------------+---------+
@@ -58,5 +83,3 @@ redisMessageSchema = StructType(
 # |    413752943|     Togo|
 # |     93618942|Argentina|
 # +-------------+---------+
-
-
